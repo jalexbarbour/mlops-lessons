@@ -1,0 +1,18 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# MLOps artifacts: reproducible from code, not tracked
+mlruns/
+mlflow.db
+adapters/
+fused-model/
+*.safetensors
+*.log

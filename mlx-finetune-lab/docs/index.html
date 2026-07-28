@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlx-finetune-lab</title>
+<meta name="description" content="Local LoRA fine-tuning pipeline for small LLMs on Apple Silicon: data, train, track, eval, serve.">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --plane:          #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --good:           #006300;
+    --series-1:       #2a78d6;   /* fine-tuned */
+    --series-1-wash:  rgba(42,120,214,0.10);
+    --bar-base:       #898781;   /* baseline model, muted */
+    --code-surface:   #f2f1ed;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --plane:          #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --good:           #0ca30c;
+      --series-1:       #3987e5;
+      --series-1-wash:  rgba(57,135,229,0.14);
+      --bar-base:       #898781;
+      --code-surface:   #232320;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--plane);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.55;
+  }
+  a { color: var(--series-1); }
+  .wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 0 24px 96px;
+  }
+
+  header.hero {
+    padding: 64px 0 40px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 40px;
+  }
+  .eyebrow {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 0 0 12px;
+  }
+  h1 {
+    font-size: clamp(28px, 4.5vw, 40px);
+    margin: 0 0 14px;
+    letter-spacing: -0.01em;
+  }
+  .lede {
+    font-size: 18px;
+    color: var(--text-secondary);
+    max-width: 60ch;
+    margin: 0 0 20px;
+  }
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  .pill {
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 12px;
+  }
+
+  section { margin: 56px 0; }
+  h2 {
+    font-size: 22px;
+    margin: 0 0 8px;
+    letter-spacing: -0.005em;
+  }
+  .section-lede {
+    color: var(--text-secondary);
+    margin: 0 0 24px;
+    max-width: 68ch;
+  }
+
+  /* Stat tiles */
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1px;
+    background: var(--gridline);
+    border: 1px solid var(--gridline);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .tile {
+    background: var(--surface-1);
+    padding: 20px;
+  }
+  .tile .label {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 0 0 10px;
+  }
+  .tile .value {
+    font-size: 30px;
+    font-weight: 600;
+    font-variant-numeric: proportional-nums;
+    margin: 0;
+  }
+  .tile .delta {
+    font-size: 13px;
+    color: var(--good);
+    font-weight: 600;
+    margin-top: 6px;
+  }
+  .tile .sub {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 6px;
+  }
+
+  /* Toolchain table */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 15px;
+  }
+  th {
+    text-align: left;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    font-weight: 600;
+    padding: 0 12px 10px;
+    border-bottom: 1px solid var(--gridline);
+  }
+  td {
+    padding: 12px;
+    border-bottom: 1px solid var(--gridline);
+    vertical-align: top;
+    color: var(--text-secondary);
+  }
+  td:first-child, td:nth-child(2) {
+    color: var(--text-primary);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  tr:last-child td { border-bottom: none; }
+
+  /* Pipeline steps */
+  ol.steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    counter-reset: step;
+  }
+  ol.steps li {
+    counter-increment: step;
+    position: relative;
+    padding: 0 0 28px 44px;
+    border-left: 1px solid var(--gridline);
+    margin-left: 15px;
+  }
+  ol.steps li:last-child {
+    border-left-color: transparent;
+    padding-bottom: 0;
+  }
+  ol.steps li::before {
+    content: counter(step);
+    position: absolute;
+    left: -15px;
+    top: 0;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: var(--surface-1);
+    border: 1px solid var(--gridline);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .step-title {
+    font-weight: 600;
+    margin: 4px 0 8px;
+  }
+  .step-desc {
+    color: var(--text-secondary);
+    font-size: 15px;
+    margin: 0 0 10px;
+  }
+
+  code, pre {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13.5px;
+  }
+  code {
+    background: var(--code-surface);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  pre {
+    background: var(--code-surface);
+    border: 1px solid var(--gridline);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 0;
+  }
+  pre code { background: none; padding: 0; }
+
+  /* Chart */
+  .chart-card {
+    border: 1px solid var(--gridline);
+    border-radius: 12px;
+    padding: 24px;
+    background: var(--surface-1);
+  }
+  .legend {
+    display: flex;
+    gap: 20px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 28px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 8px; }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; }
+  .swatch.base { background: var(--bar-base); }
+  .swatch.finetuned { background: var(--series-1); }
+
+  .chart-body {
+    display: flex;
+    justify-content: space-around;
+    align-items: flex-end;
+    height: 200px;
+    border-bottom: 1px solid var(--baseline);
+  }
+  .category {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    justify-content: flex-end;
+  }
+  .bar-pair {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 100%;
+  }
+  .bar {
+    width: 22px;
+    max-width: 22px;
+    border-radius: 4px 4px 0 0;
+    position: relative;
+    display: flex;
+    justify-content: center;
+  }
+  .bar.base { background: var(--bar-base); }
+  .bar.finetuned { background: var(--series-1); }
+  .bar .value {
+    position: absolute;
+    top: -22px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    font-variant-numeric: proportional-nums;
+  }
+  .cat-label {
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-align: center;
+  }
+
+  /* Repo tree */
+  .tree {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13.5px;
+    color: var(--text-secondary);
+    border: 1px solid var(--gridline);
+    border-radius: 8px;
+    padding: 16px 20px;
+    background: var(--surface-1);
+  }
+  .tree .path { color: var(--text-primary); }
+  .tree .comment { color: var(--text-muted); }
+  .tree div { padding: 2px 0; }
+
+  footer {
+    margin-top: 72px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <p class="eyebrow">MLOps · Local fine-tuning</p>
+    <h1>mlx-finetune-lab</h1>
+    <p class="lede">
+      A LoRA fine-tuning pipeline for small LLMs, running entirely on-device
+      on Apple Silicon. Built to exercise the full MLOps loop &mdash; data,
+      train, track, evaluate, serve &mdash; on hardware with 16&nbsp;GB of
+      unified memory.
+    </p>
+    <div class="meta-row">
+      <span class="pill">MLX + mlx-lm</span>
+      <span class="pill">uv</span>
+      <span class="pill">MLflow</span>
+      <span class="pill">Qwen2.5-1.5B-Instruct</span>
+    </div>
+  </header>
+
+  <section id="results">
+    <h2>Results</h2>
+    <p class="section-lede">
+      Toy task: extract a structured JSON object
+      (<code>task</code>, <code>owner</code>, <code>due_date</code>,
+      <code>priority</code>) from a freeform note. Scored on a 30-example
+      held-out test set, exact string match and per-field accuracy.
+    </p>
+
+    <div class="tiles">
+      <div class="tile">
+        <p class="label">Exact-match accuracy</p>
+        <p class="value">80%</p>
+        <p class="delta">+80pp vs base model</p>
+      </div>
+      <div class="tile">
+        <p class="label">Field accuracy</p>
+        <p class="value">94.2%</p>
+        <p class="delta">+45.8pp vs base model</p>
+      </div>
+      <div class="tile">
+        <p class="label">Peak memory, training</p>
+        <p class="value">2.3 GB</p>
+        <p class="sub">of 16 GB unified memory</p>
+      </div>
+      <div class="tile">
+        <p class="label">Fine-tune wall time</p>
+        <p class="value">108s</p>
+        <p class="sub">200 iterations, LoRA rank 8</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="comparison">
+    <h2>Base vs. fine-tuned</h2>
+    <p class="section-lede">
+      The base model gets the content right but never lands the exact
+      schema &mdash; it paraphrases field names and reformats values. The
+      fine-tune closes that gap.
+    </p>
+    <div class="chart-card">
+      <div class="legend">
+        <div class="legend-item"><span class="swatch base"></span>Base model</div>
+        <div class="legend-item"><span class="swatch finetuned"></span>Fine-tuned</div>
+      </div>
+      <div class="chart-body">
+        <div class="category">
+          <div class="bar-pair">
+            <div class="bar base" style="height: 2px;"><span class="value">0%</span></div>
+            <div class="bar finetuned" style="height: 160px;"><span class="value">80%</span></div>
+          </div>
+          <div class="cat-label">Exact match</div>
+        </div>
+        <div class="category">
+          <div class="bar-pair">
+            <div class="bar base" style="height: 96.6px;"><span class="value">48.3%</span></div>
+            <div class="bar finetuned" style="height: 188.3px;"><span class="value">94.2%</span></div>
+          </div>
+          <div class="cat-label">Field accuracy</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="toolchain">
+    <h2>Toolchain</h2>
+    <p class="section-lede">
+      Chosen for a 16&nbsp;GB Apple Silicon machine, where unified memory
+      efficiency matters more than ecosystem breadth.
+    </p>
+    <table>
+      <thead>
+        <tr><th>Layer</th><th>Tool</th><th>Why</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Training runtime</td>
+          <td>MLX (mlx-lm)</td>
+          <td>Apple's own framework, built for unified memory &mdash; no CPU&harr;GPU copies, the most headroom per GB on this hardware.</td>
+        </tr>
+        <tr>
+          <td>Env / deps</td>
+          <td>uv</td>
+          <td>Pins the Python version and dependency graph in a lockfile &mdash; reproducibility starts here.</td>
+        </tr>
+        <tr>
+          <td>Fine-tuning method</td>
+          <td>LoRA</td>
+          <td>Full fine-tuning (plus optimizer state) doesn't fit comfortably in 16&nbsp;GB; LoRA trains ~0.2% of parameters and fits easily.</td>
+        </tr>
+        <tr>
+          <td>Experiment tracking</td>
+          <td>MLflow (local, sqlite)</td>
+          <td>Logs hyperparameters, loss curves, and the adapter artifact per run, so fine-tunes are comparable instead of lost.</td>
+        </tr>
+        <tr>
+          <td>Data versioning</td>
+          <td>jsonl + git</td>
+          <td>LoRA datasets are small; no need for DVC-scale tooling yet.</td>
+        </tr>
+        <tr>
+          <td>Serving</td>
+          <td>mlx_lm.server</td>
+          <td>OpenAI-compatible local endpoint &mdash; closes the loop from fine-tune to something callable.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="pipeline">
+    <h2>Pipeline</h2>
+    <ol class="steps">
+      <li>
+        <p class="step-title">Install dependencies</p>
+        <p class="step-desc">Creates a <code>.venv</code> pinned to Python 3.12 and installs mlx-lm + mlflow.</p>
+        <pre><code>uv sync</code></pre>
+      </li>
+      <li>
+        <p class="step-title">Generate the dataset</p>
+        <p class="step-desc">Deterministic, seeded synthetic data: 200 train / 30 valid / 30 test examples.</p>
+        <pre><code>uv run python data/generate_dataset.py</code></pre>
+      </li>
+      <li>
+        <p class="step-title">Fine-tune with tracking</p>
+        <p class="step-desc">LoRA fine-tune via <code>mlx_lm.lora.train_model</code>. A custom <code>MLflowCallback</code> hooks the trainer's <code>on_train_loss_report</code> / <code>on_val_loss_report</code> events and logs params, per-step metrics, and the adapter as an MLflow artifact.</p>
+        <pre><code>uv run python train.py</code></pre>
+      </li>
+      <li>
+        <p class="step-title">Evaluate</p>
+        <p class="step-desc">Scores base vs. fine-tuned on the held-out test set: exact match and per-field accuracy, both logged to the same MLflow experiment.</p>
+        <pre><code>uv run python eval.py</code></pre>
+      </li>
+      <li>
+        <p class="step-title">Fuse and serve</p>
+        <p class="step-desc">Merges the LoRA adapter into the base weights, then serves it locally behind an OpenAI-compatible endpoint.</p>
+        <pre><code>uv run python -m mlx_lm fuse \
+  --model mlx-community/Qwen2.5-1.5B-Instruct-4bit \
+  --adapter-path adapters --save-path fused-model
+
+uv run python -m mlx_lm server --model fused-model --port 8765</code></pre>
+      </li>
+    </ol>
+  </section>
+
+  <section id="tracking">
+    <h2>Inspect experiment tracking</h2>
+    <p class="section-lede">Every run &mdash; training and eval &mdash; is queryable in the MLflow UI.</p>
+    <pre><code>uv run mlflow ui --backend-store-uri sqlite:///mlflow.db</code></pre>
+  </section>
+
+  <section id="layout">
+    <h2>Repository layout</h2>
+    <div class="tree">
+      <div><span class="path">data/generate_dataset.py</span> <span class="comment">&mdash; synthetic dataset generator (deterministic, seeded)</span></div>
+      <div><span class="path">train.py</span> <span class="comment">&mdash; LoRA fine-tune + MLflowCallback</span></div>
+      <div><span class="path">eval.py</span> <span class="comment">&mdash; exact-match / field-accuracy scoring, base vs. fine-tuned</span></div>
+      <div><span class="path">adapters/</span>, <span class="path">fused-model/</span>, <span class="path">mlruns/</span>, <span class="path">mlflow.db</span> <span class="comment">&mdash; generated, gitignored</span></div>
+    </div>
+  </section>
+
+  <footer>
+    mlx-finetune-lab &middot; local LoRA fine-tuning on Apple Silicon
+  </footer>
+
+</div>
+</body>
+</html>
