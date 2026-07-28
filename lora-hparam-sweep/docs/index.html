@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lora-hparam-sweep</title>
+<meta name="description" content="Grid search over LoRA rank and learning rate, every config tracked in MLflow and ranked on a held-out test set.">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --plane:          #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --good:           #006300;
+    --series-1:       #2a78d6;
+    --critical:       #d03b3b;
+    --code-surface:   #f2f1ed;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --plane:          #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --good:           #0ca30c;
+      --series-1:       #3987e5;
+      --critical:       #e66767;
+      --code-surface:   #232320;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--plane);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.55;
+  }
+  a { color: var(--series-1); }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 24px 96px; }
+
+  header.hero {
+    padding: 64px 0 40px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 40px;
+  }
+  .eyebrow {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 0 0 12px;
+  }
+  h1 { font-size: clamp(28px, 4.5vw, 40px); margin: 0 0 14px; letter-spacing: -0.01em; }
+  .lede { font-size: 18px; color: var(--text-secondary); max-width: 62ch; margin: 0 0 20px; }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--text-muted); }
+  .pill { border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; }
+  .back-link { display: inline-block; margin-bottom: 24px; font-size: 14px; }
+
+  section { margin: 56px 0; }
+  h2 { font-size: 22px; margin: 0 0 8px; letter-spacing: -0.005em; }
+  .section-lede { color: var(--text-secondary); margin: 0 0 24px; max-width: 68ch; }
+
+  /* Stat tiles */
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1px;
+    background: var(--gridline);
+    border: 1px solid var(--gridline);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .tile { background: var(--surface-1); padding: 20px; }
+  .tile .label { font-size: 13px; color: var(--text-muted); margin: 0 0 10px; }
+  .tile .value { font-size: 30px; font-weight: 600; font-variant-numeric: proportional-nums; margin: 0; }
+  .tile .delta { font-size: 13px; color: var(--good); font-weight: 600; margin-top: 6px; }
+  .tile .sub { font-size: 13px; color: var(--text-muted); margin-top: 6px; }
+
+  /* Heatmap */
+  .chart-card { border: 1px solid var(--gridline); border-radius: 12px; padding: 24px; background: var(--surface-1); }
+  .heatmap-layout { display: flex; gap: 8px; }
+  .heatmap-ylabel {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    font-size: 13px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-bottom: 24px;
+  }
+  .heatmap-main { flex: 1; }
+  .heatmap-grid {
+    display: grid;
+    grid-template-columns: 60px repeat(3, 1fr);
+    gap: 2px;
+    background: var(--surface-1);
+  }
+  .heatmap-grid .corner { }
+  .heatmap-grid .col-head, .heatmap-grid .row-head {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 8px 4px;
+  }
+  .heatmap-grid .row-head { justify-content: flex-end; padding-right: 12px; }
+  .cell {
+    border-radius: 6px;
+    min-height: 64px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    font-weight: 700;
+    text-align: center;
+    line-height: 1.3;
+  }
+  .cell .sub-label { font-size: 11px; font-weight: 500; opacity: 0.85; margin-top: 2px; }
+  .heatmap-legend { display: flex; align-items: center; gap: 24px; margin-top: 20px; font-size: 13px; color: var(--text-secondary); flex-wrap: wrap; }
+  .gradient-legend { display: flex; align-items: center; gap: 8px; }
+  .gradient-bar { width: 120px; height: 10px; border-radius: 5px; background: linear-gradient(to right, #cde2fb, #0d366b); }
+  .legend-swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; vertical-align: middle; margin-right: 6px; }
+
+  /* Table */
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th {
+    text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--text-muted); font-weight: 600; padding: 0 12px 10px; border-bottom: 1px solid var(--gridline);
+  }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--gridline); vertical-align: top; color: var(--text-secondary); }
+  tr.winner td { color: var(--text-primary); font-weight: 600; background: color-mix(in srgb, var(--series-1) 8%, transparent); }
+  tr.diverged td { color: var(--text-muted); }
+  tr:last-child td { border-bottom: none; }
+
+  /* Pipeline steps */
+  ol.steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+  ol.steps li { counter-increment: step; position: relative; padding: 0 0 28px 44px; border-left: 1px solid var(--gridline); margin-left: 15px; }
+  ol.steps li:last-child { border-left-color: transparent; padding-bottom: 0; }
+  ol.steps li::before {
+    content: counter(step); position: absolute; left: -15px; top: 0; width: 30px; height: 30px;
+    border-radius: 50%; background: var(--surface-1); border: 1px solid var(--gridline); color: var(--text-primary);
+    font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  }
+  .step-title { font-weight: 600; margin: 4px 0 8px; }
+  .step-desc { color: var(--text-secondary); font-size: 15px; margin: 0 0 10px; }
+
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13.5px; }
+  code { background: var(--code-surface); padding: 2px 6px; border-radius: 4px; }
+  pre { background: var(--code-surface); border: 1px solid var(--gridline); border-radius: 8px; padding: 14px 16px; overflow-x: auto; margin: 0; }
+  pre code { background: none; padding: 0; }
+
+  .tree {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13.5px; color: var(--text-secondary);
+    border: 1px solid var(--gridline); border-radius: 8px; padding: 16px 20px; background: var(--surface-1);
+  }
+  .tree .path { color: var(--text-primary); }
+  .tree .comment { color: var(--text-muted); }
+  .tree div { padding: 2px 0; }
+
+  footer { margin-top: 72px; padding-top: 24px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <a class="back-link" href="../">&larr; mlops-lessons</a>
+
+  <header class="hero">
+    <p class="eyebrow">MLOps · Hyperparameter search</p>
+    <h1>lora-hparam-sweep</h1>
+    <p class="lede">
+      A grid search over LoRA rank and learning rate for the same toy task
+      as <a href="../mlx-finetune-lab/">mlx-finetune-lab</a> &mdash; every
+      config logged as its own MLflow run, every resulting adapter scored
+      on the same held-out test set. The question isn't whether fine-tuning
+      works, it's which config wins, and how you'd know.
+    </p>
+    <div class="meta-row">
+      <span class="pill">9-config grid</span>
+      <span class="pill">MLflow</span>
+      <span class="pill">Qwen2.5-1.5B-Instruct</span>
+    </div>
+  </header>
+
+  <section id="results">
+    <h2>Results</h2>
+    <p class="section-lede">
+      Ranked by test-set field accuracy, not training val_loss &mdash; the
+      metric that actually matters is whether the model gets the schema
+      right on unseen input.
+    </p>
+    <div class="tiles">
+      <div class="tile">
+        <p class="label">Winning config</p>
+        <p class="value">r8, lr 1e-4</p>
+        <p class="sub">83.3% exact match</p>
+      </div>
+      <div class="tile">
+        <p class="label">Best field accuracy</p>
+        <p class="value">95.8%</p>
+        <p class="delta">vs. 89.2% for the weakest surviving config</p>
+      </div>
+      <div class="tile">
+        <p class="label">Configs swept</p>
+        <p class="value">9</p>
+        <p class="sub">rank &times; learning rate, 8 layers fixed</p>
+      </div>
+      <div class="tile">
+        <p class="label">Configs diverged</p>
+        <p class="value">3 of 9</p>
+        <p class="sub">every lr=3e-4 run, regardless of rank</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="heatmap">
+    <h2>Field accuracy by rank &times; learning rate</h2>
+    <p class="section-lede">
+      Learning rate dominates: every <code>lr=3e-4</code> run diverges
+      to NaN or near-zero loss regardless of rank. Among the survivors,
+      rank barely matters &mdash; rank 16 never beats rank 8 anywhere
+      in the grid.
+    </p>
+    <div class="chart-card">
+      <div class="heatmap-layout">
+        <div class="heatmap-ylabel">LoRA rank</div>
+        <div class="heatmap-main">
+          <div class="heatmap-grid">
+            <div class="corner"></div>
+            <div class="col-head">lr 3e-5</div>
+            <div class="col-head">lr 1e-4</div>
+            <div class="col-head">lr 3e-4</div>
+
+            <div class="row-head">4</div>
+            <div class="cell" style="background:#cde2fb; color:#0b0b0b;">89.2%</div>
+            <div class="cell" style="background:#1c5cab; color:#ffffff;">94.2%</div>
+            <div class="cell" style="background:var(--critical); color:#ffffff;">&#10005;<span class="sub-label">diverged</span></div>
+
+            <div class="row-head">8</div>
+            <div class="cell" style="background:#3987e5; color:#0b0b0b;">92.5%</div>
+            <div class="cell" style="background:#0d366b; color:#ffffff;">95.8%</div>
+            <div class="cell" style="background:var(--critical); color:#ffffff;">&#10005;<span class="sub-label">diverged</span></div>
+
+            <div class="row-head">16</div>
+            <div class="cell" style="background:#3987e5; color:#0b0b0b;">92.5%</div>
+            <div class="cell" style="background:#5598e7; color:#0b0b0b;">91.7%</div>
+            <div class="cell" style="background:var(--critical); color:#ffffff;">&#10005;<span class="sub-label">diverged</span></div>
+          </div>
+          <div style="text-align:center; font-size:13px; color:var(--text-secondary); margin-top: 10px;">Learning rate</div>
+        </div>
+      </div>
+      <div class="heatmap-legend">
+        <div class="gradient-legend">
+          <span>89.2%</span>
+          <span class="gradient-bar"></span>
+          <span>95.8%</span>
+        </div>
+        <div><span class="legend-swatch" style="background:var(--critical);"></span>diverged (NaN / near-zero loss)</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="leaderboard">
+    <h2>Full leaderboard</h2>
+    <table>
+      <thead>
+        <tr><th>Rank</th><th>Learning rate</th><th class="num">Val loss</th><th class="num">Exact match</th><th class="num">Field accuracy</th></tr>
+      </thead>
+      <tbody>
+        <tr class="winner"><td>8</td><td>1e-4</td><td class="num">0.032</td><td class="num">83.3%</td><td class="num">95.8%</td></tr>
+        <tr><td>4</td><td>1e-4</td><td class="num">0.036</td><td class="num">76.7%</td><td class="num">94.2%</td></tr>
+        <tr><td>8</td><td>3e-5</td><td class="num">0.024</td><td class="num">73.3%</td><td class="num">92.5%</td></tr>
+        <tr><td>16</td><td>3e-5</td><td class="num">0.028</td><td class="num">73.3%</td><td class="num">92.5%</td></tr>
+        <tr><td>16</td><td>1e-4</td><td class="num">0.033</td><td class="num">76.7%</td><td class="num">91.7%</td></tr>
+        <tr><td>4</td><td>3e-5</td><td class="num">0.025</td><td class="num">66.7%</td><td class="num">89.2%</td></tr>
+        <tr class="diverged"><td>4</td><td>3e-4</td><td class="num">2.630</td><td class="num">0.0%</td><td class="num">10.8%</td></tr>
+        <tr class="diverged"><td>8</td><td>3e-4</td><td class="num">4.166</td><td class="num">0.0%</td><td class="num">10.8%</td></tr>
+        <tr class="diverged"><td>16</td><td>3e-4</td><td class="num">nan</td><td class="num">0.0%</td><td class="num">10.8%</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="why">
+    <h2>Why rank val_loss and test accuracy separately</h2>
+    <p class="section-lede">
+      val_loss is what the optimizer sees during training and is cheap to
+      compute every few steps &mdash; useful for catching divergence early,
+      as it does here for every <code>lr=3e-4</code> run. It is not the same
+      question as "does the fine-tuned model actually produce the right
+      JSON on inputs it hasn't seen," which only a held-out generation-based
+      eval answers. <code>compare.py</code> computes both and logs them onto
+      the same MLflow run, so a config's training curve and its real-world
+      accuracy live side by side instead of requiring two separate lookups.
+    </p>
+  </section>
+
+  <section id="pipeline">
+    <h2>Pipeline</h2>
+    <ol class="steps">
+      <li>
+        <p class="step-title">Install dependencies</p>
+        <pre><code>uv sync</code></pre>
+      </li>
+      <li>
+        <p class="step-title">Generate the dataset</p>
+        <p class="step-desc">Same generator as mlx-finetune-lab, copied for self-containment &mdash; deterministic, seeded.</p>
+        <pre><code>uv run python data/generate_dataset.py</code></pre>
+      </li>
+      <li>
+        <p class="step-title">Run the sweep</p>
+        <p class="step-desc">9 configs (rank &times; learning rate), each a fresh model load and its own MLflow run under the <code>*-sweep</code> experiment.</p>
+        <pre><code>uv run python sweep.py</code></pre>
+      </li>
+      <li>
+        <p class="step-title">Evaluate and rank</p>
+        <p class="step-desc">Scores every adapter on the held-out test set, logs <code>test_exact_match</code> / <code>test_field_accuracy</code> back onto each run, prints the ranked leaderboard.</p>
+        <pre><code>uv run python compare.py</code></pre>
+      </li>
+    </ol>
+  </section>
+
+  <section id="tracking">
+    <h2>Inspect experiment tracking</h2>
+    <pre><code>uv run mlflow ui --backend-store-uri sqlite:///mlflow.db</code></pre>
+  </section>
+
+  <section id="layout">
+    <h2>Repository layout</h2>
+    <div class="tree">
+      <div><span class="path">data/generate_dataset.py</span> <span class="comment">&mdash; same toy-task generator as mlx-finetune-lab</span></div>
+      <div><span class="path">sweep.py</span> <span class="comment">&mdash; grid search, one MLflow run per (rank, learning_rate) pair</span></div>
+      <div><span class="path">compare.py</span> <span class="comment">&mdash; test-set evaluation + ranked leaderboard across all sweep runs</span></div>
+      <div><span class="path">adapters/</span>, <span class="path">mlruns/</span>, <span class="path">mlflow.db</span> <span class="comment">&mdash; generated, gitignored</span></div>
+    </div>
+  </section>
+
+  <footer>
+    lora-hparam-sweep &middot; part of <a href="../">mlops-lessons</a>
+  </footer>
+
+</div>
+</body>
+</html>
