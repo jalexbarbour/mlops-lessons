@@ -13,3 +13,7 @@ Exercises learning MLOps and the tooling around it, run locally on a
   comparison: grid search over LoRA rank and learning rate, every config
   logged as its own MLflow run, evaluated and ranked on a held-out test
   set. See its [README](lora-hparam-sweep/README.md).
+- [`fantasy-draft-tool`](fantasy-draft-tool/) — live fantasy football
+  draft assistant: tracks snake-draft picks and suggests the best
+  available player, weighing roster need and bye-week conflicts through a
+  pluggable scoring strategy. See its [README](fantasy-draft-tool/README.md).

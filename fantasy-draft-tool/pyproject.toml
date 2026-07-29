@@ -1,0 +1,15 @@
+[project]
+name = "fantasy-draft-tool"
+version = "0.1.0"
+description = "Live fantasy football draft assistant that suggests the best available pick, factoring in roster needs and bye-week conflicts."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
